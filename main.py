@@ -2,7 +2,7 @@
 # from llama_index.core import PromptTemplate
 # from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 # from llama_index.core import VectorStoreIndex, ServiceContext, SimpleDirectoryReader
-import streamlit as st
+# import streamlit as st
 from langchain_community.document_loaders import PyMuPDFLoader
 from langchain_huggingface.embeddings import HuggingFaceEmbeddings
 from langchain_text_splitters import CharacterTextSplitter
@@ -10,9 +10,23 @@ from langchain_chroma import Chroma
 from langchain_community.vectorstores import Qdrant
 from langchain_community.llms import Ollama
 from openai import OpenAI
+from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+import uvicorn
 
-def ask_rag(db, query: str, client):
-  docs = db.similarity_search(query)
+# Import your RAG system components here
+# from your_rag_module import retrieve_context
+client = OpenAI(
+    base_url = 'http://localhost:11434/v1',
+    api_key='ollama', # required, but unused
+)
+
+embeddings = HuggingFaceEmbeddings(model_name="snowflake/snowflake-arctic-embed-m")
+vectordb = Chroma(persist_directory='../chunkdbs',embedding_function=embeddings)
+
+def retrieve_context(query: str):
+  docs = vectordb.similarity_search(query)
   search_results = ''.join([doc.page_content for doc in docs])
 
   response = client.chat.completions.create(
@@ -22,9 +36,9 @@ def ask_rag(db, query: str, client):
       {"role": "user", "content": query + search_results}
     ]
   )
-
-  with st.chat_message("assistant"):
-      reply = st.write_stream(*response.choices[0].message.content)
+  return response.choices[0].message.content
+  # with st.chat_message("assistant"):
+      # reply = st.write(response.choices[0].message.content)
 
 
 # Load and chunk documents
@@ -41,22 +55,31 @@ def load_chunks(docs):
           chunks.append(chunk) 
   return chunks
 
-query = st.chat_input("Ask a question!")
-pdfdb = ['./DocLib/7.06__The_Quantum_Harmonic_Oscillator.pdf']
+# query = st.chat_input("Ask a question!")
 # Load vector embedding model
-embeddings = HuggingFaceEmbeddings(model_name="snowflake/snowflake-arctic-embed-m")
-db = Chroma.from_documents(load_chunks(pdfdb), embeddings)
+
+app = FastAPI()
+
+class Query(BaseModel):
+    text: str
+
+class Response(BaseModel):
+    context: str
+
+@app.post("/query", response_model=Response)
+async def process_query(query: Query):
+    try:
+        # Call your RAG system here
+        context = retrieve_context(query=query.text)
+        return Response(context=context)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8000)
 
 
 
-client = OpenAI(
-    base_url = 'http://localhost:11434/v1',
-    api_key='ollama', # required, but unused
-)
-
-
-if query is not None:
-    ask_rag(db, query, client)
 
 # r = requests.get('http://localhost:11434/v1/chat/completions', data={
 #  "model": "llama3",
